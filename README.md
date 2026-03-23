@@ -24,8 +24,26 @@ A browser-based tool for exploring, searching, and downloading **Sentinel-2 L2A*
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) v18 or later
-- npm v9 or later
+[Homebrew](https://brew.sh/) and Node.js v18 or later.
+
+**1. Install Homebrew** (if not already installed)
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+**2. Install Node.js**
+
+```bash
+brew install node
+```
+
+Verify the installation:
+
+```bash
+node -v
+npm -v
+```
 
 ### Steps
 
