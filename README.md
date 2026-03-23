@@ -31,7 +31,7 @@ A browser-based tool for exploring, searching, and downloading **Sentinel-2 L2A*
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/YOUR_USERNAME/Sentinel-2-Explorer.git
+git clone https://github.com/Akkarapon-chaiyana/Sentinel-2-Explorer.git
 cd Sentinel-2-Explorer
 
 # 2. Install dependencies
