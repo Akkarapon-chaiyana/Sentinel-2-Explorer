@@ -1,6 +1,6 @@
 # Sentinel-2 Explorer
 
-A browser-based tool for exploring, searching, and downloading **Sentinel-2 L2A** satellite imagery via the [Element84 STAC API](https://earth-search.aws.element84.com/v1). Supports MGRS tile selection, a global 50 km grid, yearly median mosaic script generation (local stackstac + Google Earth Engine), and multiple basemap options.
+A browser-based tool for exploring, searching, and downloading **Sentinel-2 L2A** satellite imagery via the [Element84 STAC API](https://earth-search.aws.element84.com/v1). Supports MGRS tile selection, a global 50 km grid, yearly median mosaic script generation (local stackstac + Google Earth Engine), and chip-based download for segmentation model training.
 
 ---
 
@@ -13,6 +13,8 @@ A browser-based tool for exploring, searching, and downloading **Sentinel-2 L2A*
 - **Mosaic Script Generation** — Generate ready-to-run Python scripts for yearly median mosaics using:
   - `stackstac` (local processing from AWS S3 COGs)
   - Google Earth Engine (`COPERNICUS/S2_SR_HARMONIZED`)
+- **GEE Chip-Based Download** — High Volume API download as 256 px chips directly to `images/` and `masks/` folders — ready for segmentation model training (no full-image merge, no RAM accumulation).
+- **Binary Mask Support** — Attach a GEE asset as a binary mask (0 = background, 1 = target). Mask chips are downloaded in parallel with spectral chips.
 - **Individual Scene Download** — Export STAC item metadata and COG download links as JSON or CSV.
 - **Multiple Basemaps** — Satellite (ESRI), Light, Dark, Streets (Carto).
 - **Area Selection** — Click map, draw polygon, upload GeoJSON, or search by place name.
@@ -83,7 +85,7 @@ In the **Tools** tab, choose one of four methods:
 | **Click Map** | Click anywhere on the map to set a 1° × 1° bounding box |
 | **Draw Polygon** | Click to add points, double-click to close the polygon |
 | **Upload GeoJSON** | Upload a `.geojson` or `.json` file (max 25 MB) |
-| **Search Place** | Type a country or place name (e.g. `Ethiopia`) and press Enter |
+| **Search Place** | Type a country or place name (e.g. `Thailand`) and press Enter |
 
 ### 2. Set Filters
 
@@ -123,10 +125,56 @@ After selecting tiles or grid cells, the modal lets you configure:
 | **Bands** | Choose from B02–B12 + SCL |
 | **GEE Project ID** | Required for Earth Engine scripts |
 | **Download Mode** | High Volume API (local disk) or Google Drive |
+| **Binary Image Asset** | Optional GEE asset path for a binary mask layer |
+| **Cell Workers** | Parallel cells to process simultaneously (1–8) |
 
 Click **Copy Script** or **Download .py** to get the script.
 
-### 7. Basemap
+### 7. GEE High Volume API — Chip Download
+
+When **High Volume API** mode is selected the generated script downloads data as **256 × 256 px chips** directly to disk using `ee.Image.getDownloadURL()`:
+
+```
+images/
+└── S2_median_E103.0N14.5_2025_10m/
+    ├── chip_0000_0000.tif   ← 10 spectral bands
+    ├── chip_0000_0001.tif
+    └── ...
+
+masks/
+└── S2_median_E103.0N14.5_2025_10m/
+    ├── chip_0000_0000.tif   ← binary: 0 = background, 1 = target class
+    ├── chip_0000_0001.tif
+    └── ...
+```
+
+**Key behaviours:**
+- Each chip is written directly to its own GeoTIFF — no full-image merge, no RAM accumulation.
+- GEE's occasional 257 px response is cropped to exactly 256 × 256 px.
+- Binary mask uses `.unmask(0, False)` to fill all masked pixels with `0` before download; GEE's default `nodata=0` flag is then cleared so both `0` and `1` are valid values.
+- Exponential backoff retry handles `429 Too Many Requests` and `503` errors automatically.
+- Multiple cells run in parallel via `CELL_WORKERS`; chips within each cell run in parallel via `NUM_WORKERS`.
+
+#### Python dependencies
+
+```bash
+pip install earthengine-api requests rasterio tqdm
+```
+
+#### Authentication (run once)
+
+```bash
+earthengine authenticate
+```
+
+#### Run the script
+
+```bash
+python sentinel2_gee_grid.py --local   # download chips to images/ + masks/
+python sentinel2_gee_grid.py           # export to Google Drive instead
+```
+
+### 8. Basemap
 
 In the **Tools** tab under **Basemap**, switch between:
 
@@ -147,7 +195,7 @@ src/
 ├── index.css             # Global styles (light/gold theme)
 ├── main.jsx              # React entry point
 ├── api/
-│   └── stac.js           # Element84 STAC API client + Python script generators
+│   └── stac.js           # STAC API client + Python script generators (stackstac & GEE)
 ├── components/
 │   ├── DownloadModal.jsx  # Scene download modal (JSON / CSV)
 │   ├── MosaicModal.jsx    # Mosaic script generator modal
@@ -170,6 +218,7 @@ src/
 | Place Geocoding | [Nominatim / OpenStreetMap](https://nominatim.openstreetmap.org) |
 | Satellite Basemap | ESRI World Imagery |
 | Vector Basemaps | [Carto Basemaps](https://carto.com/basemaps/) |
+| Earth Engine Imagery | [Google Earth Engine](https://earthengine.google.com) — `COPERNICUS/S2_SR_HARMONIZED` |
 
 ---
 
