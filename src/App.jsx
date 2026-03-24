@@ -16,33 +16,23 @@ import SceneChart from './components/SceneChart';
 import GEEOverlayPanel from './components/GEEOverlayPanel';
 
 // ── GEE REST API helpers ─────────────────────────────────────────────────────
-function buildGEEExpression(assetPath, paletteHex) {
-  // ee.Image(assetPath).selfMask().visualize({palette:[hex], min:1, max:1})
-  // GEE REST API uses "image" (not "this") as the receiver argument name.
+function buildGEEExpression(assetPath) {
+  // ee.Image(assetPath).selfMask()
+  // Visualization (palette, min/max) is passed separately in visualizationOptions.
   // selfMask() makes 0-valued pixels transparent; only value=1 pixels are shown.
-  const loadedImage = {
-    functionInvocationValue: {
-      functionName: 'Image.load',
-      arguments: { id: { constantValue: assetPath } },
-    },
-  };
-  const maskedImage = {
-    functionInvocationValue: {
-      functionName: 'Image.selfMask',
-      arguments: { image: loadedImage },
-    },
-  };
   return {
     result: '0',
     values: {
       '0': {
         functionInvocationValue: {
-          functionName: 'Image.visualize',
+          functionName: 'Image.selfMask',
           arguments: {
-            image:   maskedImage,
-            palette: { constantValue: [paletteHex] },
-            min:     { constantValue: 1 },
-            max:     { constantValue: 1 },
+            image: {
+              functionInvocationValue: {
+                functionName: 'Image.load',
+                arguments: { id: { constantValue: assetPath } },
+              },
+            },
           },
         },
       },
@@ -322,7 +312,14 @@ export default function App() {
           'Content-Type': 'application/json',
           'x-goog-user-project': project,
         },
-        body: JSON.stringify({ expression: buildGEEExpression(assetPath, paletteHex) }),
+        body: JSON.stringify({
+          expression: buildGEEExpression(assetPath),
+          fileFormat: 'AUTO_JPEG_PNG',
+          visualizationOptions: {
+            ranges:        [{ min: 1, max: 1 }],
+            paletteColors: [paletteHex],
+          },
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
