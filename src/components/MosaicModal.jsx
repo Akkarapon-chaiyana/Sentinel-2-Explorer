@@ -30,16 +30,20 @@ export default function MosaicModal({ mode = 'mgrs', tileIds = [], gridCells = [
   const [maxCloud,      setMaxCloud]      = useState(20);
   const [resolution,    setResolution]    = useState(20);
   const [engine,        setEngine]        = useState('stackstac'); // 'stackstac' | 'earthengine'
-  const [geeProject,    setGeeProject]    = useState('');
+  const [geeProject,    setGeeProject]    = useState('tony-1122');
   const [eeMode,        setEeMode]        = useState('highvolume'); // 'highvolume' | 'drive'
-  const [selectedBands, setSelectedBands] = useState(new Set(['blue', 'green', 'red', 'nir']));
+  const [binaryAsset,   setBinaryAsset]   = useState('projects/tony-1122/assets/LDD/LDD_2019_2022_active_rice_binary');
+  const [cellWorkers,   setCellWorkers]   = useState(2);
+  const [numWorkers,    setNumWorkers]    = useState(4);
+  const [chipPx,        setChipPx]        = useState(256);
+  const [selectedBands, setSelectedBands] = useState(new Set(BAND_OPTIONS.filter(b => b.key !== 'scl').map(b => b.key)));
 
   const toggleBand = (key) => {
     setSelectedBands(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   };
 
   const params = { yearStart: Number(yearStart), yearEnd: Number(yearEnd), bands: [...selectedBands], maxCloud: Number(maxCloud), resolution: Number(resolution) };
-  const eeParams = { ...params, project: geeProject.trim() || 'your-gee-project-id', modeLocal: eeMode === 'highvolume' };
+  const eeParams = { ...params, project: geeProject.trim() || 'tony-1122', modeLocal: eeMode === 'highvolume', binaryAsset, cellWorkers: Number(cellWorkers) || 2, numWorkers: Number(numWorkers) || 4, chipPx: Number(chipPx) || 256 };
 
   const script = engine === 'earthengine'
     ? (mode === 'grid' ? buildEEGridScript({ cells: gridCells, ...eeParams }) : buildEEMGRSScript({ tileIds, ...eeParams }))
@@ -159,6 +163,81 @@ export default function MosaicModal({ mode = 'mgrs', tileIds = [], gridCells = [
                     ))}
                   </div>
                 </div>
+              </div>
+
+              {/* Download tuning — only relevant for High Volume local download */}
+              {eeMode === 'highvolume' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+                  {/* Chip size */}
+                  <div>
+                    <div className="label" style={{ color: '#f59e0b', marginBottom: 6 }}>Chip Size (px)</div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {[64, 128, 256, 512].map(px => (
+                        <button
+                          key={px}
+                          onClick={() => setChipPx(px)}
+                          style={{
+                            flex: 1, padding: '4px 0', fontSize: 12, borderRadius: 6, cursor: 'pointer', fontWeight: chipPx === px ? 700 : 400,
+                            background: chipPx === px ? '#f59e0b' : 'transparent',
+                            color: chipPx === px ? '#000' : 'var(--muted)',
+                            border: `1px solid ${chipPx === px ? '#f59e0b' : 'var(--border)'}`,
+                          }}
+                        >{px}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Parallel cells + chip workers side by side */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <div className="label" style={{ color: '#f59e0b', marginBottom: 4 }}>
+                        Parallel Cells
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input type="range" min={1} max={8} step={1} value={cellWorkers}
+                          onChange={e => setCellWorkers(Number(e.target.value))}
+                          style={{ flex: 1, accentColor: '#f59e0b' }} />
+                        <span style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, color: '#f59e0b', fontSize: 13 }}>{cellWorkers}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="label" style={{ color: '#f59e0b', marginBottom: 4 }}>
+                        Chip Workers
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input type="range" min={1} max={16} step={1} value={numWorkers}
+                          onChange={e => setNumWorkers(Number(e.target.value))}
+                          style={{ flex: 1, accentColor: '#f59e0b' }} />
+                        <span style={{ minWidth: 18, textAlign: 'center', fontWeight: 700, color: '#f59e0b', fontSize: 13 }}>{numWorkers}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--muted)', lineHeight: 1.5 }}>
+                    {cellWorkers} × {numWorkers} = <strong style={{ color: '#f59e0b' }}>{cellWorkers * numWorkers}</strong> total GEE requests.
+                    Lower if you see 429 errors.
+                  </div>
+
+                </div>
+              )}
+
+              {/* Binary image asset */}
+              <div>
+                <div className="label" style={{ color: '#f59e0b', marginBottom: 4 }}>
+                  Binary Image Asset <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span>
+                </div>
+                <input
+                  className="input"
+                  placeholder="e.g. projects/your-project/assets/your-binary-mask"
+                  value={binaryAsset}
+                  onChange={e => setBinaryAsset(e.target.value)}
+                  style={{ borderColor: binaryAsset ? 'rgba(245,158,11,0.5)' : undefined }}
+                />
+                {binaryAsset && (
+                  <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                    Downloaded separately to <code style={{ color: '#f59e0b' }}>masks/</code>. Spectral bands go to <code style={{ color: '#f59e0b' }}>images/</code>.
+                  </div>
+                )}
               </div>
             </>
           )}

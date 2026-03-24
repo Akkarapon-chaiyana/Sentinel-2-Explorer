@@ -396,7 +396,124 @@ const EE_BAND_MAP = {
 
 const EE_CLOUD_MASK_PY = `\n# SCL cloud mask: keep 4=veg 5=soil 6=water 7=unclassified\ndef mask_clouds(image):\n    scl = image.select("SCL")\n    good = scl.eq(4).Or(scl.eq(5)).Or(scl.eq(6)).Or(scl.eq(7))\n    return image.updateMask(good)\n`;
 
-const EE_EXPORT_PY = `\n        if MODE_LOCAL:\n            out_file = f"{label}.tif"\n            print(f"  [3/3] Downloading via High Volume API → {out_file} ...")\n            geemap.download_ee_image(\n                image=composite, filename=out_file,\n                region=geometry, scale=RESOLUTION, crs="EPSG:4326",\n                max_tile_size=4,\n            )\n            elapsed = time.time() - t0\n            print(f"  Saved → {out_file}  ({elapsed:.0f}s)")\n        else:\n            print(f"  [3/3] Submitting Drive export task ...")\n            task = ee.batch.Export.image.toDrive(\n                image=composite, description=label,\n                folder=DRIVE_FOLDER, fileNamePrefix=label,\n                region=geometry, scale=RESOLUTION, crs="EPSG:4326",\n                maxPixels=1e13, fileFormat="GeoTIFF",\n            )\n            task.start()\n            elapsed = time.time() - t0\n            print(f"  Task ID: {task.id}  ({elapsed:.1f}s)")\n            print(f"  Monitor: https://code.earthengine.google.com/tasks")\n`;
+const EE_EXPORT_PY = `\n    if MODE_LOCAL:\n        mask_ee = ee.Image(BINARY_ASSET).unmask(0, False).clip(geometry) if BINARY_ASSET else None\n        print(f"  [3/3] Downloading 256px chips → images/{label}/  {'+ masks/' if mask_ee else ''}")\n        download_chips(composite, mask_ee, geometry, RESOLUTION, "EPSG:4326", label)\n        elapsed = time.time() - t0\n        n = len(os.listdir(os.path.join("images", label)))\n        print(f"  Done  {n} chips in {elapsed:.0f}s")\n    else:\n        print(f"  [3/3] Submitting Drive export task ...")\n        task = ee.batch.Export.image.toDrive(\n            image=composite, description=label,\n            folder=DRIVE_FOLDER, fileNamePrefix=label,\n            region=geometry, scale=RESOLUTION, crs="EPSG:4326",\n            maxPixels=1e13, fileFormat="GeoTIFF",\n        )\n        task.start()\n        elapsed = time.time() - t0\n        print(f"  Task ID: {task.id}  ({elapsed:.1f}s)")\n        print(f"  Monitor: https://code.earthengine.google.com/tasks")\n`;
+
+const EE_CHIP_HELPER_PY = `
+# ── chip downloader ────────────────────────────────────────────────────────────
+MAX_RETRY = 6
+BASE_WAIT = 5     # seconds before first retry (doubles each attempt)
+
+def _get_chip(image, west, south, east, north, scale, crs, retry=0):
+    region = ee.Geometry.BBox(west, south, east, north)
+    try:
+        url = image.getDownloadURL({
+            "region": region, "scale": scale, "crs": crs, "fileFormat": "GeoTIFF",
+        })
+        r = requests.get(url, timeout=300)
+        r.raise_for_status()
+        return r.content
+    except Exception as exc:
+        if retry >= MAX_RETRY:
+            raise
+        wait = BASE_WAIT * (2 ** retry) + random.uniform(0, 2)
+        time.sleep(wait)
+        return _get_chip(image, west, south, east, north, scale, crs, retry + 1)
+
+def _save_chip(data, path):
+    """Write GEE download response to a GeoTIFF — handles raw TIFF and ZIP (multi-band)."""
+    if data[:2] == b'PK':  # ZIP magic
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            tifs = sorted(n for n in zf.namelist() if n.lower().endswith('.tif'))
+            if len(tifs) == 1:
+                open(path, 'wb').write(zf.read(tifs[0]))
+            else:  # stack per-band TIFFs into one multi-band GeoTIFF
+                tmp2 = tempfile.mkdtemp()
+                bpaths = [os.path.join(tmp2, os.path.basename(n)) for n in tifs]
+                for n, p in zip(tifs, bpaths):
+                    open(p, 'wb').write(zf.read(n))
+                with rasterio.open(bpaths[0]) as ref:
+                    prof = {**ref.profile, 'count': len(bpaths)}
+                with rasterio.open(path, 'w', **prof) as dst:
+                    for i, bp in enumerate(bpaths, 1):
+                        with rasterio.open(bp) as src:
+                            dst.write(src.read(1), i)
+                shutil.rmtree(tmp2)
+    else:
+        open(path, 'wb').write(data)
+
+
+# thread-local tqdm row — each parallel cell gets its own progress-bar line
+import threading as _th
+_tl = _th.local(); _pos_l = _th.Lock(); _npos = [0]
+def _bar_pos():
+    if not hasattr(_tl, "p"):
+        with _pos_l: _tl.p = _npos[0]; _npos[0] += 1
+    return _tl.p
+
+def _enforce_chip_size(path):
+    """Crop to exactly CHIP_PX×CHIP_PX — GEE pixel-grid snapping may return 257px."""
+    with rasterio.open(path) as src:
+        if src.width == CHIP_PX and src.height == CHIP_PX:
+            return
+        data    = src.read()[:, :CHIP_PX, :CHIP_PX]
+        profile = src.profile.copy()
+        profile.update(width=CHIP_PX, height=CHIP_PX)
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(data)
+
+def download_chips(img_ee, mask_ee, geometry, scale, crs, label):
+    """Download spectral bands + binary mask directly as 256px chip files.
+
+    Output layout (each chip is its own GeoTIFF — no full-image merge):
+        images/{label}/chip_RRRR_CCCC.tif   — spectral bands
+        masks/{label}/chip_RRRR_CCCC.tif    — binary mask, nodata=0 (only 1=valid)
+    """
+    b        = geometry.bounds().getInfo()["coordinates"][0]
+    west     = min(p[0] for p in b);  east  = max(p[0] for p in b)
+    south    = min(p[1] for p in b);  north = max(p[1] for p in b)
+    chip_deg = CHIP_PX * scale / 111_320
+    cols     = math.ceil((east  - west)  / chip_deg)
+    rows     = math.ceil((north - south) / chip_deg)
+    total    = cols * rows
+
+    img_dir = os.path.join("images", label);  os.makedirs(img_dir, exist_ok=True)
+    msk_dir = os.path.join("masks",  label)
+    if mask_ee is not None:
+        os.makedirs(msk_dir, exist_ok=True)
+
+    print(f"    {total} chips ({cols}×{rows}, {CHIP_PX}px @ {scale}m, {NUM_WORKERS} workers)", flush=True)
+
+    jobs = [
+        (r, c,
+         west  + c * chip_deg,         south + r * chip_deg,
+         min(west  + (c + 1)*chip_deg, east),
+         min(south + (r + 1)*chip_deg, north))
+        for r in range(rows) for c in range(cols)
+    ]
+
+    def fetch(job):
+        r, c, cw, cs, ce, cn = job
+        # ── spectral image chip ───────────────────────────────────────────────
+        img_path = os.path.join(img_dir, f"chip_{r:04d}_{c:04d}.tif")
+        _save_chip(_get_chip(img_ee, cw, cs, ce, cn, scale, crs), img_path)
+        _enforce_chip_size(img_path)   # GEE may return 257px — crop to exactly 256
+        # ── binary mask chip ──────────────────────────────────────────────────
+        if mask_ee is not None:
+            msk_path = os.path.join(msk_dir, f"chip_{r:04d}_{c:04d}.tif")
+            _save_chip(_get_chip(mask_ee, cw, cs, ce, cn, scale, crs), msk_path)
+            _enforce_chip_size(msk_path)   # same crop to 256×256
+            with rasterio.open(msk_path, "r+") as ds:
+                ds.nodata = None  # clear GEE's default nodata=0 — 0=background is valid
+        return r, c
+
+    with ThreadPoolExecutor(max_workers=NUM_WORKERS) as ex:
+        futs = {ex.submit(fetch, job): job for job in jobs}
+        with tqdm(total=total, unit="chip", desc=f"  {label[:22]}", position=_bar_pos(), leave=True, ncols=80) as pbar:
+            for fut in as_completed(futs):
+                fut.result()
+                pbar.update(1)
+# ──────────────────────────────────────────────────────────────────────────────
+`;
 
 function eeDocstring(subject) {
   return `#!/usr/bin/env python3
@@ -405,26 +522,27 @@ Sentinel-2 Yearly Median Mosaic — Google Earth Engine (${subject})
 Generated by Sentinel-2 Explorer
 
 Dependencies:
-    pip install earthengine-api geemap
+    pip install earthengine-api requests rasterio tqdm
 
 Authentication (run once):
     earthengine authenticate
 
 Export options:
     python script.py          # export to Google Drive (GEE processes async)
-    python script.py --local  # download via High Volume API (faster, no Drive needed)
+    python script.py --local  # download each cell as 256px chip files → images/{label}/ + masks/{label}/
 """
 
-import os, time, warnings, logging
-# Suppress harmless GDAL ExtraSamples / geedim STAC warnings before any imports
+import os, time, warnings, logging, math, random, tempfile, requests, zipfile, io, shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+import rasterio
+from rasterio.transform import from_bounds as rio_from_bounds
 os.environ["CPL_LOG"] = "/dev/null"
 os.environ["GDAL_PAM_ENABLED"] = "NO"
 warnings.filterwarnings("ignore")
-logging.getLogger("geedim").setLevel(logging.ERROR)
 logging.getLogger("rasterio").setLevel(logging.ERROR)
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 import ee
-import geemap
 
 `;
 }
@@ -432,7 +550,7 @@ import geemap
 /**
  * GEE script for MGRS tiles.
  */
-export function buildEEMGRSScript({ tileIds, yearStart, yearEnd, bands, maxCloud, resolution, project = 'your-gee-project-id', modeLocal = true }) {
+export function buildEEMGRSScript({ tileIds, yearStart, yearEnd, bands, maxCloud, resolution, project = 'tony-1122', modeLocal = true, binaryAsset = '', cellWorkers = 2, numWorkers = 4, chipPx = 256 }) {
   const eeBands = bands.filter(b => EE_BAND_MAP[b]).map(b => EE_BAND_MAP[b]);
   const tilesRepr = JSON.stringify(tileIds);
   const yearsRepr = JSON.stringify(Array.from({ length: yearEnd - yearStart + 1 }, (_, i) => yearStart + i));
@@ -445,37 +563,47 @@ BANDS        = ${eeBandsRepr}
 MAX_CLOUD    = ${maxCloud}
 RESOLUTION   = ${resolution}
 DRIVE_FOLDER = "sentinel2_mosaics"
-MODE_LOCAL   = ${modeLocal ? 'True' : 'False'}  # True = High Volume API (local), False = Google Drive
+CELL_WORKERS = ${cellWorkers}   # parallel tiles  ↕ tune via UI slider
+NUM_WORKERS  = ${numWorkers}   # chip download threads per cell  ↕ tune via UI slider
+CHIP_PX      = ${chipPx}  # pixels per chip side  ↕ tune via UI (64 / 128 / 256 / 512)
+MODE_LOCAL   = ${modeLocal ? 'True' : 'False'}  # True = chip download (local), False = Google Drive
+BINARY_ASSET = "${binaryAsset.trim()}"  # GEE asset path for binary mask — leave empty to skip
 
 ee.Initialize(project=PROJECT)
-` + EE_CLOUD_MASK_PY + `
+` + EE_CHIP_HELPER_PY + EE_CLOUD_MASK_PY + `
 import re
 total_start = time.time()
 
-for tile in TILES:
+def process_cell(args):
+    tile, year = args
     m = re.match(r"(\\d+)", tile)
     zone = int(m.group(1)) if m else 1
     lon_c = (zone - 1) * 6 - 180 + 3
     geometry = ee.Geometry.BBox(lon_c - 3, -84, lon_c + 3, 84)
-
-    for year in YEARS:
-        t0 = time.time()
-        print(f"\\n{'='*60}")
-        print(f"Tile: {tile}  year: {year}  {RESOLUTION}m  cloud<{MAX_CLOUD}%")
-        print(f"{'='*60}")
-        print("  [1/3] Filtering collection ...")
-        col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-            .filterBounds(geometry)
-            .filterDate(f"{year}-01-01", f"{year}-12-31")
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", MAX_CLOUD))
-            .map(mask_clouds)
-            .select(BANDS))
-        n = col.size().getInfo()
-        print(f"  [1/3] {n} scenes after cloud filter")
-        print("  [2/3] Computing median on GEE servers ...")
-        composite = col.median().clip(geometry)
-        label = f"S2_median_{tile}_{year}_{RESOLUTION}m"
+    t0 = time.time()
+    print(f"\\n{'='*60}")
+    print(f"Tile: {tile}  year: {year}  {RESOLUTION}m  cloud<{MAX_CLOUD}%")
+    print(f"{'='*60}")
+    print("  [1/3] Filtering collection ...")
+    col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(geometry)
+        .filterDate(f"{year}-01-01", f"{year}-12-31")
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", MAX_CLOUD))
+        .map(mask_clouds)
+        .select(BANDS))
+    n = col.size().getInfo()
+    print(f"  [1/3] {n} scenes after cloud filter")
+    print("  [2/3] Computing median on GEE servers ...")
+    composite = col.median().clip(geometry)
+    label = f"S2_median_{tile}_{year}_{RESOLUTION}m"
 ` + EE_EXPORT_PY + `
+jobs = [(tile, year) for tile in TILES for year in YEARS]
+with ThreadPoolExecutor(max_workers=CELL_WORKERS) as ex:
+    futs = {ex.submit(process_cell, job): job for job in jobs}
+    with tqdm(total=len(jobs), unit="cell", desc="cells", position=CELL_WORKERS, leave=True, ncols=80) as pbar:
+        for fut in as_completed(futs):
+            fut.result()
+            pbar.update(1)
 total = time.time() - total_start
 if MODE_LOCAL:
     print(f"\\nAll done in {total:.0f}s.")
@@ -488,7 +616,7 @@ else:
 /**
  * GEE script for 50km grid cells.
  */
-export function buildEEGridScript({ cells, yearStart, yearEnd, bands, maxCloud, resolution, project = 'your-gee-project-id', modeLocal = true }) {
+export function buildEEGridScript({ cells, yearStart, yearEnd, bands, maxCloud, resolution, project = 'tony-1122', modeLocal = true, binaryAsset = '', cellWorkers = 2, numWorkers = 4, chipPx = 256 }) {
   const eeBands = bands.filter(b => EE_BAND_MAP[b]).map(b => EE_BAND_MAP[b]);
   const cellsRepr = JSON.stringify(cells.map(c => ({ id: c.id, bbox: c.bbox })), null, 2);
   const yearsRepr = JSON.stringify(Array.from({ length: yearEnd - yearStart + 1 }, (_, i) => yearStart + i));
@@ -501,36 +629,46 @@ BANDS        = ${eeBandsRepr}
 MAX_CLOUD    = ${maxCloud}
 RESOLUTION   = ${resolution}
 DRIVE_FOLDER = "sentinel2_mosaics"
-MODE_LOCAL   = ${modeLocal ? 'True' : 'False'}  # True = High Volume API (local), False = Google Drive
+CELL_WORKERS = ${cellWorkers}   # parallel cells  ↕ tune via UI slider
+NUM_WORKERS  = ${numWorkers}   # chip download threads per cell  ↕ tune via UI slider
+CHIP_PX      = ${chipPx}  # pixels per chip side  ↕ tune via UI (64 / 128 / 256 / 512)
+MODE_LOCAL   = ${modeLocal ? 'True' : 'False'}  # True = chip download (local), False = Google Drive
+BINARY_ASSET = "${binaryAsset.trim()}"  # GEE asset path for binary mask — leave empty to skip
 
 ee.Initialize(project=PROJECT)
-` + EE_CLOUD_MASK_PY + `
+` + EE_CHIP_HELPER_PY + EE_CLOUD_MASK_PY + `
 total_start = time.time()
 
-for cell in CELLS:
+def process_cell(args):
+    cell, year = args
     cell_id = cell["id"]
     west, south, east, north = cell["bbox"]
     geometry = ee.Geometry.BBox(west, south, east, north)
-
-    for year in YEARS:
-        t0 = time.time()
-        print(f"\\n{'='*60}")
-        print(f"Cell: {cell_id}  year: {year}  {RESOLUTION}m  cloud<{MAX_CLOUD}%")
-        print(f"bbox: [{west}, {south}, {east}, {north}]")
-        print(f"{'='*60}")
-        print("  [1/3] Filtering collection ...")
-        col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-            .filterBounds(geometry)
-            .filterDate(f"{year}-01-01", f"{year}-12-31")
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", MAX_CLOUD))
-            .map(mask_clouds)
-            .select(BANDS))
-        n = col.size().getInfo()
-        print(f"  [1/3] {n} scenes after cloud filter")
-        print("  [2/3] Computing median on GEE servers ...")
-        composite = col.median().clip(geometry)
-        label = f"S2_median_{cell_id}_{year}_{RESOLUTION}m"
+    t0 = time.time()
+    print(f"\\n{'='*60}")
+    print(f"Cell: {cell_id}  year: {year}  {RESOLUTION}m  cloud<{MAX_CLOUD}%")
+    print(f"bbox: {cell['bbox']}")
+    print(f"{'='*60}")
+    print("  [1/3] Filtering collection ...")
+    col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(geometry)
+        .filterDate(f"{year}-01-01", f"{year}-12-31")
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", MAX_CLOUD))
+        .map(mask_clouds)
+        .select(BANDS))
+    n = col.size().getInfo()
+    print(f"  [1/3] {n} scenes after cloud filter")
+    print("  [2/3] Computing median on GEE servers ...")
+    composite = col.median().clip(geometry)
+    label = f"S2_median_{cell_id}_{year}_{RESOLUTION}m"
 ` + EE_EXPORT_PY + `
+jobs = [(cell, year) for cell in CELLS for year in YEARS]
+with ThreadPoolExecutor(max_workers=CELL_WORKERS) as ex:
+    futs = {ex.submit(process_cell, job): job for job in jobs}
+    with tqdm(total=len(jobs), unit="cell", desc="cells", position=CELL_WORKERS, leave=True, ncols=80) as pbar:
+        for fut in as_completed(futs):
+            fut.result()
+            pbar.update(1)
 total = time.time() - total_start
 if MODE_LOCAL:
     print(f"\\nAll done in {total:.0f}s.")
