@@ -85,7 +85,8 @@ export default function App() {
   const mapRef       = useRef(null);
   const mapEl        = useRef(null);
   const fileInputRef = useRef(null);
-  const geeTokenRef  = useRef('');   // readable inside transformRequest closure
+  const geeTokenRef   = useRef('');  // readable inside transformRequest closure
+  const geeProjectRef = useRef('');  // needed for x-goog-user-project quota header
   const geeOverlayRef = useRef({});  // readable inside setupSources after style reload
 
   const [collapsed,   setCollapsed]   = useState(false);
@@ -152,10 +153,16 @@ export default function App() {
       center: [0, 20],
       zoom: 2,
       attributionControl: false,
-      // Auth header for GEE tile requests — reads from ref so token updates without re-init
+      // Auth + quota headers for GEE tile requests — reads from refs, no re-init needed
       transformRequest: (url) => {
         if (url.startsWith(GEE_TILE_BASE) && geeTokenRef.current) {
-          return { url, headers: { Authorization: `Bearer ${geeTokenRef.current}` } };
+          return {
+            url,
+            headers: {
+              Authorization: `Bearer ${geeTokenRef.current}`,
+              'x-goog-user-project': geeProjectRef.current,
+            },
+          };
         }
       },
     });
@@ -303,12 +310,17 @@ export default function App() {
 
   // ── GEE overlay handlers ─────────────────────────────────────────────────────
   const loadGEEOverlay = useCallback(async (assetPath, project, token, paletteHex) => {
-    geeTokenRef.current = token;
+    geeTokenRef.current   = token;
+    geeProjectRef.current = project;
     setGeeOverlay(prev => ({ ...prev, loading: true, error: null }));
     try {
       const res = await fetch(`${GEE_TILE_BASE}/projects/${project}/maps`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'x-goog-user-project': project,
+        },
         body: JSON.stringify({ expression: buildGEEExpression(assetPath, paletteHex) }),
       });
       if (!res.ok) {
