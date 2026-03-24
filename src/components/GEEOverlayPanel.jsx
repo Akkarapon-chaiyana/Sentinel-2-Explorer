@@ -1,5 +1,5 @@
-import { Eye, EyeOff, RefreshCw, X, Layers, ChevronDown, ChevronRight, LogIn } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { Eye, EyeOff, RefreshCw, X, Layers, ChevronDown, ChevronRight, Zap } from 'lucide-react';
+import { useState } from 'react';
 
 const PALETTES = [
   { id: 'green',  label: 'Green',  bg: '#22c55e', hex: '22c55e' },
@@ -8,38 +8,32 @@ const PALETTES = [
   { id: 'blue',   label: 'Blue',   bg: '#3b82f6', hex: '3b82f6' },
 ];
 
-const EE_SCOPE      = 'https://www.googleapis.com/auth/earthengine';
-const DEFAULT_ASSET    = 'projects/tony-1122/assets/LDD/LDD_2019_2022_active_rice_binary';
-const DEFAULT_PROJECT  = import.meta.env.VITE_GEE_PROJECT_ID ?? 'tony-1122';
-const DEFAULT_CLIENT_ID = import.meta.env.VITE_GEE_CLIENT_ID ?? '';
+const TOKEN_SERVER    = 'http://localhost:8765/token';
+const DEFAULT_ASSET   = 'projects/tony-1122/assets/LDD/LDD_2019_2022_active_rice_binary';
+const DEFAULT_PROJECT = import.meta.env.VITE_GEE_PROJECT_ID ?? 'tony-1122';
 
 export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityChange, onRemove }) {
-  const [open,      setOpen]      = useState(false);
-  const [assetPath, setAssetPath] = useState(DEFAULT_ASSET);
-  const [project,   setProject]   = useState(DEFAULT_PROJECT);
-  const [clientId,  setClientId]  = useState(DEFAULT_CLIENT_ID);
-  const [token,     setToken]     = useState('');
-  const [palette,   setPalette]   = useState('green');
-  const [gisReady,  setGisReady]  = useState(false);
+  const [open,        setOpen]      = useState(false);
+  const [assetPath,   setAssetPath] = useState(DEFAULT_ASSET);
+  const [project,     setProject]   = useState(DEFAULT_PROJECT);
+  const [token,       setToken]     = useState('');
+  const [palette,     setPalette]   = useState('green');
+  const [tokenStatus, setTokenStatus] = useState(null); // 'ok' | 'error' | 'fetching'
 
-  // Detect when Google Identity Services library has loaded
-  useEffect(() => {
-    const check = () => {
-      if (window.google?.accounts?.oauth2) { setGisReady(true); return; }
-      setTimeout(check, 500);
-    };
-    check();
-  }, []);
-
-  const handleGetToken = () => {
-    if (!gisReady || !clientId.trim()) return;
-    window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId.trim(),
-      scope: EE_SCOPE,
-      callback: (resp) => {
-        if (resp.access_token) setToken(resp.access_token);
-      },
-    }).requestAccessToken();
+  const handleGetToken = async () => {
+    setTokenStatus('fetching');
+    try {
+      const res = await fetch(TOKEN_SERVER);
+      const data = await res.json();
+      if (res.ok && data.token) {
+        setToken(data.token);
+        setTokenStatus('ok');
+      } else {
+        setTokenStatus('error');
+      }
+    } catch {
+      setTokenStatus('error');
+    }
   };
 
   const isLoaded = !!overlay.mapName;
@@ -47,11 +41,14 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
   return (
     <div className="section" style={{ paddingBottom: open ? undefined : 0 }}>
 
-      {/* ── Dropdown header ──────────────────────────────────────────────── */}
+      {/* ── Collapsible header ───────────────────────────────────────────── */}
       <div
         className="section-title"
         onClick={() => setOpen(o => !o)}
-        style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', userSelect: 'none' }}
+        style={{
+          cursor: 'pointer', userSelect: 'none',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -59,10 +56,10 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
           GEE Asset Overlay
           {isLoaded && (
             <span style={{
-              marginLeft: 4, fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+              fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', borderRadius: 4,
+              padding: '1px 5px', marginLeft: 2,
               background: overlay.enabled ? '#dcfce7' : '#f3f4f6',
-              color: overlay.enabled ? '#16a34a' : 'var(--muted)',
-              borderRadius: 4, padding: '1px 5px',
+              color:      overlay.enabled ? '#16a34a' : 'var(--muted)',
             }}>
               {overlay.enabled ? 'ON' : 'OFF'}
             </span>
@@ -74,15 +71,18 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
           <button
             onClick={e => { e.stopPropagation(); onToggle(!overlay.enabled); }}
             title={overlay.enabled ? 'Hide overlay' : 'Show overlay'}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, lineHeight: 1,
-                     color: overlay.enabled ? 'var(--gold)' : 'var(--muted)' }}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              padding: 2, lineHeight: 1,
+              color: overlay.enabled ? 'var(--gold)' : 'var(--muted)',
+            }}
           >
             {overlay.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
           </button>
         )}
       </div>
 
-      {/* ── Body (only when open) ─────────────────────────────────────────── */}
+      {/* ── Body ─────────────────────────────────────────────────────────── */}
       {open && (
         <div style={{ marginTop: 8 }}>
 
@@ -110,64 +110,62 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
             />
           </div>
 
-          {/* OAuth Client ID + auto-token */}
+          {/* Access Token + auto-fetch */}
           <div style={{ marginBottom: 6 }}>
-            <label style={{ fontSize: 10, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
-              OAuth Client ID
-              <span style={{ marginLeft: 4, color: 'var(--muted)', fontWeight: 400 }}>
-                (Google Cloud Console → APIs &amp; Services → Credentials)
-              </span>
+            <label style={{ fontSize: 10, color: 'var(--muted)', display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+              <span>Access Token</span>
+              {tokenStatus === 'ok'    && <span style={{ color: '#16a34a' }}>✓ fetched</span>}
+              {tokenStatus === 'error' && <span style={{ color: '#dc2626' }}>✗ server not running</span>}
             </label>
             <div style={{ display: 'flex', gap: 5 }}>
               <input
                 className="input"
-                value={clientId}
-                onChange={e => setClientId(e.target.value)}
-                placeholder="xxxx.apps.googleusercontent.com"
+                type="password"
+                value={token}
+                onChange={e => { setToken(e.target.value); setTokenStatus(null); }}
+                placeholder="ya29.…"
                 style={{ fontSize: 11, flex: 1 }}
               />
               <button
                 onClick={handleGetToken}
-                disabled={!gisReady || !clientId.trim()}
-                title={!clientId.trim() ? 'Enter OAuth Client ID first' : 'Sign in with Google to get token'}
+                disabled={tokenStatus === 'fetching'}
+                title="Fetch token from local token_server.py"
                 style={{
-                  padding: '5px 9px', borderRadius: 8, border: '1px solid var(--border)',
-                  background: clientId.trim() ? 'var(--gold-pale)' : '#f3f4f6',
-                  color: clientId.trim() ? 'var(--gold)' : 'var(--muted)',
-                  cursor: clientId.trim() ? 'pointer' : 'not-allowed',
-                  display: 'flex', alignItems: 'center', gap: 4, fontSize: 11,
-                  fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
+                  padding: '5px 9px', borderRadius: 8, flexShrink: 0,
+                  border: '1px solid var(--border)',
+                  background: tokenStatus === 'ok' ? '#dcfce7' : 'var(--gold-pale)',
+                  color:      tokenStatus === 'ok' ? '#16a34a' : 'var(--gold)',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center',
+                  gap: 4, fontSize: 11, fontWeight: 600,
                 }}
               >
-                <LogIn size={12} /> Get Token
+                {tokenStatus === 'fetching'
+                  ? <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                  : <Zap size={12} />}
+                Get Token
               </button>
             </div>
+
+            {/* Token server hint */}
+            {tokenStatus === 'error' && (
+              <div style={{
+                marginTop: 5, padding: '5px 8px', borderRadius: 6, fontSize: 10,
+                background: '#fef9c3', border: '1px solid #fde047', color: '#713f12',
+                lineHeight: 1.5,
+              }}>
+                Start the token server first:
+                <br />
+                <code style={{ fontSize: 10 }}>python token_server.py</code>
+              </div>
+            )}
+            {tokenStatus === null && !token && (
+              <div style={{ marginTop: 4, fontSize: 10, color: 'var(--muted)' }}>
+                Run <code style={{ fontSize: 10, background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>python token_server.py</code> then click Get Token
+              </div>
+            )}
           </div>
 
-          {/* Manual token fallback */}
-          <div style={{ marginBottom: 6 }}>
-            <label style={{ fontSize: 10, color: 'var(--muted)', display: 'block', marginBottom: 3 }}>
-              Access Token
-              {!clientId.trim() && (
-                <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--amber)' }}>
-                  · <code style={{ fontSize: 10 }}>gcloud auth print-access-token</code>
-                </span>
-              )}
-              {token && (
-                <span style={{ marginLeft: 6, color: '#16a34a', fontSize: 10 }}>✓ filled</span>
-              )}
-            </label>
-            <input
-              className="input"
-              type="password"
-              value={token}
-              onChange={e => setToken(e.target.value)}
-              placeholder="ya29.…"
-              style={{ fontSize: 11 }}
-            />
-          </div>
-
-          {/* Palette */}
+          {/* Color palette */}
           <div style={{ marginBottom: 8 }}>
             <label style={{ fontSize: 10, color: 'var(--muted)', display: 'block', marginBottom: 5 }}>Overlay Color</label>
             <div style={{ display: 'flex', gap: 6 }}>
@@ -190,9 +188,14 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
           {/* Opacity — only when loaded */}
           {isLoaded && (
             <div style={{ marginBottom: 10 }}>
-              <label style={{ fontSize: 10, color: 'var(--muted)', display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label style={{
+                fontSize: 10, color: 'var(--muted)',
+                display: 'flex', justifyContent: 'space-between', marginBottom: 4,
+              }}>
                 <span>Opacity</span>
-                <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10 }}>{Math.round(overlay.opacity * 100)}%</span>
+                <span style={{ fontFamily: 'JetBrains Mono', fontSize: 10 }}>
+                  {Math.round(overlay.opacity * 100)}%
+                </span>
               </label>
               <input
                 type="range" min="0" max="1" step="0.05"
@@ -203,7 +206,7 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
             </div>
           )}
 
-          {/* Load / Remove buttons */}
+          {/* Load / Remove */}
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               className="btn-primary"
@@ -234,11 +237,12 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
             )}
           </div>
 
-          {/* Error */}
+          {/* API error */}
           {overlay.error && (
             <div style={{
               marginTop: 8, padding: '6px 9px', borderRadius: 7, fontSize: 11,
-              background: '#fef2f2', border: '1px solid #fca5a5', color: '#dc2626', wordBreak: 'break-word',
+              background: '#fef2f2', border: '1px solid #fca5a5', color: '#dc2626',
+              wordBreak: 'break-word',
             }}>
               {overlay.error}
             </div>
