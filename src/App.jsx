@@ -13,6 +13,43 @@ import Toast from './components/Toast';
 import DownloadModal from './components/DownloadModal';
 import MosaicModal from './components/MosaicModal';
 import SceneChart from './components/SceneChart';
+import GEEOverlayPanel from './components/GEEOverlayPanel';
+
+// ── GEE REST API helpers ─────────────────────────────────────────────────────
+function buildGEEExpression(assetPath, paletteHex) {
+  // ee.Image(assetPath).selfMask().visualize({palette:[hex], min:1, max:1})
+  // selfMask() makes 0-valued pixels transparent; only value=1 pixels are shown.
+  return {
+    result: '0',
+    values: {
+      '0': {
+        functionInvocationValue: {
+          functionName: 'Image.visualize',
+          arguments: {
+            this: {
+              functionInvocationValue: {
+                functionName: 'Image.selfMask',
+                arguments: {
+                  this: {
+                    functionInvocationValue: {
+                      functionName: 'Image.load',
+                      arguments: { id: { constantValue: assetPath } },
+                    },
+                  },
+                },
+              },
+            },
+            palette: { constantValue: [paletteHex] },
+            min:     { constantValue: 1 },
+            max:     { constantValue: 1 },
+          },
+        },
+      },
+    },
+  };
+}
+
+const GEE_TILE_BASE = 'https://earthengine.googleapis.com/v1';
 
 const BASEMAPS = [
   {
@@ -45,9 +82,11 @@ function defaultDates() {
 }
 
 export default function App() {
-  const mapRef      = useRef(null);
-  const mapEl       = useRef(null);
+  const mapRef       = useRef(null);
+  const mapEl        = useRef(null);
   const fileInputRef = useRef(null);
+  const geeTokenRef  = useRef('');   // readable inside transformRequest closure
+  const geeOverlayRef = useRef({});  // readable inside setupSources after style reload
 
   const [collapsed,   setCollapsed]   = useState(false);
   const [activeTab,   setActiveTab]   = useState('tools');
@@ -73,6 +112,10 @@ export default function App() {
   const [gridCountryQuery,   setGridCountryQuery]   = useState('');
   const [gridBoundary,       setGridBoundary]       = useState(null); // GeoJSON feature
   const [basemap,            setBasemap]            = useState('satellite');
+  const [geeOverlay,         setGeeOverlay]         = useState({
+    mapName: null, tileUrl: null, enabled: false,
+    opacity: 0.75, loading: false, error: null,
+  });
 
   // Refs for re-syncing map sources after basemap style switch
   const aoiFeatureRef         = useRef(null);
@@ -109,6 +152,12 @@ export default function App() {
       center: [0, 20],
       zoom: 2,
       attributionControl: false,
+      // Auth header for GEE tile requests — reads from ref so token updates without re-init
+      transformRequest: (url) => {
+        if (url.startsWith(GEE_TILE_BASE) && geeTokenRef.current) {
+          return { url, headers: { Authorization: `Bearer ${geeTokenRef.current}` } };
+        }
+      },
     });
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
@@ -231,11 +280,79 @@ export default function App() {
       ['tiles-grid-fill', 'tiles-grid-line'].forEach(lid => {
         if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', visibility);
       });
+
+      // Re-add GEE overlay layer after style reload (basemap switch removes all layers)
+      const ov = geeOverlayRef.current;
+      if (ov.tileUrl && !map.getSource('gee-overlay')) {
+        map.addSource('gee-overlay', { type: 'raster', tiles: [ov.tileUrl], tileSize: 256 });
+        map.addLayer({
+          id: 'gee-overlay-layer', type: 'raster', source: 'gee-overlay',
+          paint: { 'raster-opacity': ov.opacity },
+          layout: { visibility: ov.enabled ? 'visible' : 'none' },
+        });
+      }
     };
 
     map.on('style.load', setupSources);
 
     return () => map.remove();
+  }, []);
+
+  // ── Keep geeOverlayRef in sync (readable inside setupSources closure) ───────
+  useEffect(() => { geeOverlayRef.current = geeOverlay; }, [geeOverlay]);
+
+  // ── GEE overlay handlers ─────────────────────────────────────────────────────
+  const loadGEEOverlay = useCallback(async (assetPath, project, token, paletteHex) => {
+    geeTokenRef.current = token;
+    setGeeOverlay(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const res = await fetch(`${GEE_TILE_BASE}/projects/${project}/maps`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expression: buildGEEExpression(assetPath, paletteHex) }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error?.message || `HTTP ${res.status}`);
+      }
+      const { name } = await res.json();
+      const tileUrl = `${GEE_TILE_BASE}/${name}/tiles/{z}/{x}/{y}`;
+      const map = mapRef.current;
+      if (map.getSource('gee-overlay')) {
+        map.removeLayer('gee-overlay-layer');
+        map.removeSource('gee-overlay');
+      }
+      map.addSource('gee-overlay', { type: 'raster', tiles: [tileUrl], tileSize: 256 });
+      map.addLayer({ id: 'gee-overlay-layer', type: 'raster', source: 'gee-overlay',
+        paint: { 'raster-opacity': 0.75 } });
+      setGeeOverlay(prev => ({ ...prev, mapName: name, tileUrl, enabled: true, loading: false }));
+    } catch (err) {
+      setGeeOverlay(prev => ({ ...prev, loading: false, error: err.message }));
+    }
+  }, []);
+
+  const toggleGEEOverlay = useCallback((enabled) => {
+    const map = mapRef.current;
+    if (map.getLayer('gee-overlay-layer'))
+      map.setLayoutProperty('gee-overlay-layer', 'visibility', enabled ? 'visible' : 'none');
+    setGeeOverlay(prev => ({ ...prev, enabled }));
+  }, []);
+
+  const setGEEOverlayOpacity = useCallback((opacity) => {
+    const map = mapRef.current;
+    if (map.getLayer('gee-overlay-layer'))
+      map.setPaintProperty('gee-overlay-layer', 'raster-opacity', opacity);
+    setGeeOverlay(prev => ({ ...prev, opacity }));
+  }, []);
+
+  const removeGEEOverlay = useCallback(() => {
+    const map = mapRef.current;
+    if (map.getSource('gee-overlay')) {
+      map.removeLayer('gee-overlay-layer');
+      map.removeSource('gee-overlay');
+    }
+    geeTokenRef.current = '';
+    setGeeOverlay({ mapName: null, tileUrl: null, enabled: false, opacity: 0.75, loading: false, error: null });
   }, []);
 
   // ── Basemap switching ───────────────────────────────────────────────────────
@@ -612,6 +729,14 @@ export default function App() {
                 ))}
               </div>
             </div>
+
+            <GEEOverlayPanel
+              overlay={geeOverlay}
+              onLoad={loadGEEOverlay}
+              onToggle={toggleGEEOverlay}
+              onOpacityChange={setGEEOverlayOpacity}
+              onRemove={removeGEEOverlay}
+            />
 
             <div className="section">
               <div className="section-title"><MousePointer size={12} /> Area Selection</div>
