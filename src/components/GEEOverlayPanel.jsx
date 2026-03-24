@@ -9,14 +9,15 @@ const PALETTES = [
 ];
 
 const EE_SCOPE      = 'https://www.googleapis.com/auth/earthengine';
-const DEFAULT_ASSET = 'projects/tony-1122/assets/LDD/LDD_2019_2022_active_rice_binary';
-const DEFAULT_PROJECT = 'tony-1122';
+const DEFAULT_ASSET    = 'projects/tony-1122/assets/LDD/LDD_2019_2022_active_rice_binary';
+const DEFAULT_PROJECT  = import.meta.env.VITE_GEE_PROJECT_ID ?? 'tony-1122';
+const DEFAULT_CLIENT_ID = import.meta.env.VITE_GEE_CLIENT_ID ?? '';
 
 export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityChange, onRemove }) {
   const [open,      setOpen]      = useState(false);
   const [assetPath, setAssetPath] = useState(DEFAULT_ASSET);
   const [project,   setProject]   = useState(DEFAULT_PROJECT);
-  const [clientId,  setClientId]  = useState('');
+  const [clientId,  setClientId]  = useState(DEFAULT_CLIENT_ID);
   const [token,     setToken]     = useState('');
   const [palette,   setPalette]   = useState('green');
   const [gisReady,  setGisReady]  = useState(false);
