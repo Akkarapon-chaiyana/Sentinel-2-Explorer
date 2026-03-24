@@ -18,7 +18,20 @@ import GEEOverlayPanel from './components/GEEOverlayPanel';
 // ── GEE REST API helpers ─────────────────────────────────────────────────────
 function buildGEEExpression(assetPath, paletteHex) {
   // ee.Image(assetPath).selfMask().visualize({palette:[hex], min:1, max:1})
+  // GEE REST API uses "image" (not "this") as the receiver argument name.
   // selfMask() makes 0-valued pixels transparent; only value=1 pixels are shown.
+  const loadedImage = {
+    functionInvocationValue: {
+      functionName: 'Image.load',
+      arguments: { id: { constantValue: assetPath } },
+    },
+  };
+  const maskedImage = {
+    functionInvocationValue: {
+      functionName: 'Image.selfMask',
+      arguments: { image: loadedImage },
+    },
+  };
   return {
     result: '0',
     values: {
@@ -26,19 +39,7 @@ function buildGEEExpression(assetPath, paletteHex) {
         functionInvocationValue: {
           functionName: 'Image.visualize',
           arguments: {
-            this: {
-              functionInvocationValue: {
-                functionName: 'Image.selfMask',
-                arguments: {
-                  this: {
-                    functionInvocationValue: {
-                      functionName: 'Image.load',
-                      arguments: { id: { constantValue: assetPath } },
-                    },
-                  },
-                },
-              },
-            },
+            image:   maskedImage,
             palette: { constantValue: [paletteHex] },
             min:     { constantValue: 1 },
             max:     { constantValue: 1 },
