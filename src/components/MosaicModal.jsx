@@ -129,7 +129,7 @@ export default function MosaicModal({ mode = 'mgrs', tileIds = [], gridCells = [
                   <div className="label" style={{ color: '#f59e0b', marginBottom: 4 }}>GEE Project ID</div>
                   <input
                     className="input"
-                    placeholder="e.g. tony-1122"
+                    placeholder="e.g. my-gee-project-id"
                     value={geeProject}
                     onChange={e => setGeeProject(e.target.value)}
                     style={{ borderColor: geeProject ? 'rgba(245,158,11,0.5)' : undefined }}
