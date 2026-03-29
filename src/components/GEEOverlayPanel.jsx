@@ -8,9 +8,8 @@ const PALETTES = [
   { id: 'blue',   label: 'Blue',   bg: '#3b82f6', hex: '3b82f6' },
 ];
 
-const TOKEN_SERVER    = 'http://localhost:8765/token';
-const DEFAULT_ASSET   = 'projects/tony-1122/assets/LDD/LDD_2019_2022_active_rice_binary';
-const DEFAULT_PROJECT = import.meta.env.VITE_GEE_PROJECT_ID ?? 'tony-1122';
+const DEFAULT_ASSET   = '';
+const DEFAULT_PROJECT = '';
 
 export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityChange, onRemove }) {
   const [open,        setOpen]      = useState(false);
@@ -20,20 +19,26 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
   const [palette,     setPalette]   = useState('green');
   const [tokenStatus, setTokenStatus] = useState(null); // 'ok' | 'error' | 'fetching'
 
-  const handleGetToken = async () => {
-    setTokenStatus('fetching');
-    try {
-      const res = await fetch(TOKEN_SERVER);
-      const data = await res.json();
-      if (res.ok && data.token) {
-        setToken(data.token);
-        setTokenStatus('ok');
-      } else {
-        setTokenStatus('error');
-      }
-    } catch {
+  const handleSignIn = () => {
+    const clientId = import.meta.env.VITE_GEE_OAUTH_CLIENT_ID;
+    if (!clientId || !window.google?.accounts?.oauth2) {
       setTokenStatus('error');
+      return;
     }
+    setTokenStatus('fetching');
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/earthengine',
+      callback: (resp) => {
+        if (resp.access_token) {
+          setToken(resp.access_token);
+          setTokenStatus('ok');
+        } else {
+          setTokenStatus('error');
+        }
+      },
+    });
+    client.requestAccessToken();
   };
 
   const isLoaded = !!overlay.mapName;
@@ -114,8 +119,8 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
           <div style={{ marginBottom: 6 }}>
             <label style={{ fontSize: 10, color: 'var(--muted)', display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
               <span>Access Token</span>
-              {tokenStatus === 'ok'    && <span style={{ color: '#16a34a' }}>✓ fetched</span>}
-              {tokenStatus === 'error' && <span style={{ color: '#dc2626' }}>✗ server not running</span>}
+              {tokenStatus === 'ok'    && <span style={{ color: '#16a34a' }}>✓ signed in</span>}
+              {tokenStatus === 'error' && <span style={{ color: '#dc2626' }}>✗ sign-in failed</span>}
             </label>
             <div style={{ display: 'flex', gap: 5 }}>
               <input
@@ -127,9 +132,9 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
                 style={{ fontSize: 11, flex: 1 }}
               />
               <button
-                onClick={handleGetToken}
+                onClick={handleSignIn}
                 disabled={tokenStatus === 'fetching'}
-                title="Fetch token from local token_server.py"
+                title="Sign in with your Google account to get an access token"
                 style={{
                   padding: '5px 9px', borderRadius: 8, flexShrink: 0,
                   border: '1px solid var(--border)',
@@ -142,25 +147,26 @@ export default function GEEOverlayPanel({ overlay, onLoad, onToggle, onOpacityCh
                 {tokenStatus === 'fetching'
                   ? <RefreshCw size={12} style={{ animation: 'spin 1s linear infinite' }} />
                   : <Zap size={12} />}
-                Get Token
+                Sign in
               </button>
             </div>
 
-            {/* Token server hint */}
+            {/* Auth hint */}
             {tokenStatus === 'error' && (
               <div style={{
                 marginTop: 5, padding: '5px 8px', borderRadius: 6, fontSize: 10,
                 background: '#fef9c3', border: '1px solid #fde047', color: '#713f12',
                 lineHeight: 1.5,
               }}>
-                Start the token server first:
-                <br />
-                <code style={{ fontSize: 10 }}>python token_server.py</code>
+                Sign-in failed. Ensure your Google account has access to{' '}
+                <a href="https://earthengine.google.com/signup" target="_blank" rel="noreferrer" style={{ color: '#713f12' }}>
+                  Google Earth Engine
+                </a>.
               </div>
             )}
             {tokenStatus === null && !token && (
               <div style={{ marginTop: 4, fontSize: 10, color: 'var(--muted)' }}>
-                Run <code style={{ fontSize: 10, background: '#f3f4f6', padding: '1px 4px', borderRadius: 3 }}>python token_server.py</code> then click Get Token
+                Click <strong>Sign in</strong> to authenticate with your Google account.
               </div>
             )}
           </div>
