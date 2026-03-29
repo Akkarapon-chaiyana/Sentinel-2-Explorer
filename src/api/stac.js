@@ -550,7 +550,7 @@ import ee
 /**
  * GEE script for MGRS tiles.
  */
-export function buildEEMGRSScript({ tileIds, yearStart, yearEnd, bands, maxCloud, resolution, project = 'tony-1122', modeLocal = true, binaryAsset = '', cellWorkers = 2, numWorkers = 4, chipPx = 256 }) {
+export function buildEEMGRSScript({ tileIds, yearStart, yearEnd, bands, maxCloud, resolution, project = '', modeLocal = true, binaryAsset = '', cellWorkers = 2, numWorkers = 4, chipPx = 256 }) {
   const eeBands = bands.filter(b => EE_BAND_MAP[b]).map(b => EE_BAND_MAP[b]);
   const tilesRepr = JSON.stringify(tileIds);
   const yearsRepr = JSON.stringify(Array.from({ length: yearEnd - yearStart + 1 }, (_, i) => yearStart + i));
@@ -616,7 +616,7 @@ else:
 /**
  * GEE script for 50km grid cells.
  */
-export function buildEEGridScript({ cells, yearStart, yearEnd, bands, maxCloud, resolution, project = 'tony-1122', modeLocal = true, binaryAsset = '', cellWorkers = 2, numWorkers = 4, chipPx = 256 }) {
+export function buildEEGridScript({ cells, yearStart, yearEnd, bands, maxCloud, resolution, project = '', modeLocal = true, binaryAsset = '', cellWorkers = 2, numWorkers = 4, chipPx = 256 }) {
   const eeBands = bands.filter(b => EE_BAND_MAP[b]).map(b => EE_BAND_MAP[b]);
   const cellsRepr = JSON.stringify(cells.map(c => ({ id: c.id, bbox: c.bbox })), null, 2);
   const yearsRepr = JSON.stringify(Array.from({ length: yearEnd - yearStart + 1 }, (_, i) => yearStart + i));

@@ -30,9 +30,9 @@ export default function MosaicModal({ mode = 'mgrs', tileIds = [], gridCells = [
   const [maxCloud,      setMaxCloud]      = useState(20);
   const [resolution,    setResolution]    = useState(20);
   const [engine,        setEngine]        = useState('stackstac'); // 'stackstac' | 'earthengine'
-  const [geeProject,    setGeeProject]    = useState('tony-1122');
+  const [geeProject,    setGeeProject]    = useState('');
   const [eeMode,        setEeMode]        = useState('highvolume'); // 'highvolume' | 'drive'
-  const [binaryAsset,   setBinaryAsset]   = useState('projects/tony-1122/assets/LDD/LDD_2019_2022_active_rice_binary');
+  const [binaryAsset,   setBinaryAsset]   = useState('');
   const [cellWorkers,   setCellWorkers]   = useState(2);
   const [numWorkers,    setNumWorkers]    = useState(4);
   const [chipPx,        setChipPx]        = useState(256);
@@ -43,7 +43,7 @@ export default function MosaicModal({ mode = 'mgrs', tileIds = [], gridCells = [
   };
 
   const params = { yearStart: Number(yearStart), yearEnd: Number(yearEnd), bands: [...selectedBands], maxCloud: Number(maxCloud), resolution: Number(resolution) };
-  const eeParams = { ...params, project: geeProject.trim() || 'tony-1122', modeLocal: eeMode === 'highvolume', binaryAsset, cellWorkers: Number(cellWorkers) || 2, numWorkers: Number(numWorkers) || 4, chipPx: Number(chipPx) || 256 };
+  const eeParams = { ...params, project: geeProject.trim(), modeLocal: eeMode === 'highvolume', binaryAsset, cellWorkers: Number(cellWorkers) || 2, numWorkers: Number(numWorkers) || 4, chipPx: Number(chipPx) || 256 };
 
   const script = engine === 'earthengine'
     ? (mode === 'grid' ? buildEEGridScript({ cells: gridCells, ...eeParams }) : buildEEMGRSScript({ tileIds, ...eeParams }))
