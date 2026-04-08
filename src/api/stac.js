@@ -413,6 +413,11 @@ def _get_chip(image, west, south, east, north, scale, crs, retry=0):
         r.raise_for_status()
         return r.content
     except Exception as exc:
+        msg = str(exc)
+        # Empty-geometry chips are permanent failures (tile falls outside image extent)
+        # — skip rather than retry to avoid infinite backoff loops
+        if "empty" in msg.lower() or ("geometry" in msg.lower() and "clip" in msg.lower()):
+            return None
         if retry >= MAX_RETRY:
             raise
         wait = BASE_WAIT * (2 ** retry) + random.uniform(0, 2)
@@ -495,15 +500,20 @@ def download_chips(img_ee, mask_ee, geometry, scale, crs, label):
         r, c, cw, cs, ce, cn = job
         # ── spectral image chip ───────────────────────────────────────────────
         img_path = os.path.join(img_dir, f"chip_{r:04d}_{c:04d}.tif")
-        _save_chip(_get_chip(img_ee, cw, cs, ce, cn, scale, crs), img_path)
+        data = _get_chip(img_ee, cw, cs, ce, cn, scale, crs)
+        if data is None:
+            return r, c  # tile outside image extent — skip silently
+        _save_chip(data, img_path)
         _enforce_chip_size(img_path)   # GEE may return 257px — crop to exactly 256
         # ── binary mask chip ──────────────────────────────────────────────────
         if mask_ee is not None:
             msk_path = os.path.join(msk_dir, f"chip_{r:04d}_{c:04d}.tif")
-            _save_chip(_get_chip(mask_ee, cw, cs, ce, cn, scale, crs), msk_path)
-            _enforce_chip_size(msk_path)   # same crop to 256×256
-            with rasterio.open(msk_path, "r+") as ds:
-                ds.nodata = None  # clear GEE's default nodata=0 — 0=background is valid
+            msk_data = _get_chip(mask_ee, cw, cs, ce, cn, scale, crs)
+            if msk_data is not None:
+                _save_chip(msk_data, msk_path)
+                _enforce_chip_size(msk_path)   # same crop to 256×256
+                with rasterio.open(msk_path, "r+") as ds:
+                    ds.nodata = None  # clear GEE's default nodata=0 — 0=background is valid
         return r, c
 
     with ThreadPoolExecutor(max_workers=NUM_WORKERS) as ex:
